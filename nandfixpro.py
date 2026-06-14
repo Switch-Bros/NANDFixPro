@@ -1738,10 +1738,51 @@ class SwitchGuiApp(tk.Tk):
             return True
 
     def _get_app_base_path(self):
+            if getattr(sys, "frozen", False):
+                return Path(sys.executable).resolve().parent
             try:
-                return Path(__file__).parent
+                return Path(__file__).resolve().parent
             except NameError:
-                return Path.cwd()
+                return Path.cwd().resolve()
+
+    def _get_partitions_folder(self):
+            """Resolve donor NAND partitions folder from settings with app-folder fallback."""
+            configured_path = self.paths["partitions_folder"].get().strip()
+            if configured_path:
+                partitions_folder = Path(configured_path)
+                if partitions_folder.is_dir():
+                    return partitions_folder
+                self._log(f"ERROR: Partitions folder path is invalid: {partitions_folder}")
+                return None
+
+            fallback_folder = self._get_app_base_path() / "lib" / "NAND"
+            if fallback_folder.is_dir():
+                self._log(f"WARNING: Partitions folder not set, using fallback: {fallback_folder}")
+                return fallback_folder
+
+            self._log("ERROR: Partitions folder is not configured and fallback lib/NAND was not found.")
+            return None
+
+    def _estimate_nand_size_gb(self, nand_source, source_type):
+            """Estimate NAND source size in GB from a file or physical device path."""
+            try:
+                if source_type == "file":
+                    source_path = Path(nand_source)
+                    if source_path.is_file():
+                        return source_path.stat().st_size / (1024**3)
+                if source_type == "device":
+                    size_bytes = self._get_disk_size_bytes(nand_source)
+                    if size_bytes and size_bytes > 0:
+                        return size_bytes / (1024**3)
+            except Exception as e:
+                self._log(f"WARNING: Could not estimate NAND size for {nand_source}: {e}")
+            return None
+
+    def _required_temp_space_gb(self, nand_size_gb=None):
+            """Return required temp free space for 32GB or 64GB/OLED NAND classes."""
+            if nand_size_gb is not None and nand_size_gb > 40:
+                return 128
+            return 64
 
     def _get_required_runtime_files(self):
             base_path = self._get_app_base_path()
@@ -2115,19 +2156,29 @@ class SwitchGuiApp(tk.Tk):
         ]
         if missing:
             step_number = 1 if self.offline_mode.get() else 2
+            next_action = (
+                "Add these paths, then click the Start button for this level."
+                if self.offline_mode.get()
+                else "Add these paths, then dismount the SD card in Hekate USB Tools and mount eMMC RAW GPP or emuMMC RAW GPP before starting this level."
+            )
             return (
                 self.tab_control,
                 f"Step {step_number}: Prepare Level {selected_level}",
-                "Missing: " + ", ".join(missing) + ". Add these paths, then dismount the SD card in Hekate USB Tools and mount eMMC RAW GPP or emuMMC RAW GPP before starting this level."
+                "Missing: " + ", ".join(missing) + ". " + next_action
             )
 
         start_button = getattr(self, f"start_level{selected_level}_button", None)
         if self._is_widget_valid(start_button) and self.button_states.get(f"level{selected_level}") == "active":
             step_number = 2 if self.offline_mode.get() else 3
+            start_message = (
+                "All required files are ready. Click Start to update or create the selected offline NAND output."
+                if self.offline_mode.get()
+                else "All required files are ready. Dismount the SD card in Hekate USB Tools, mount eMMC RAW GPP or emuMMC RAW GPP, then click Start to run this level."
+            )
             return (
                 start_button,
                 f"Step {step_number}: Start Level {selected_level}",
-                "All required files are ready. Dismount the SD card in Hekate USB Tools, mount eMMC RAW GPP or emuMMC RAW GPP, then click Start to run this level."
+                start_message
             )
 
         if self.button_states["copy_boot"] == "active":
@@ -2142,7 +2193,7 @@ class SwitchGuiApp(tk.Tk):
         return (
             self.tab_control,
             "Guided Mode",
-            "Choose the repair level that matches the case. The level button becomes active after Get Keys from SD and all required files for that level are ready."
+            "Choose the repair level that matches the case. The Start button becomes active when the required files for the selected mode and level are ready."
         )
 
     def _create_guided_callout(self):
@@ -2425,8 +2476,7 @@ class SwitchGuiApp(tk.Tk):
         self._validate_paths_and_update_buttons()               
 
     def _auto_detect_paths(self):
-        try: script_dir = Path(__file__).parent
-        except NameError: script_dir = Path.cwd()
+        script_dir = self._get_app_base_path()
         
         osfmount_path = Path("C:/Program Files/OSFMount/OSFMount.com")
         if osfmount_path.is_file(): self.paths["osfmount"].set(str(osfmount_path.resolve()))
@@ -2773,11 +2823,10 @@ class SwitchGuiApp(tk.Tk):
 
             # STEP 2: Extract the correct USER partition
             self._log("\n[STEP 2/4] Preparing donor USER partition...")
-            try:
-                script_dir = Path(__file__).parent
-            except NameError:
-                script_dir = Path.cwd()
-            partitions_folder = script_dir / "lib" / "NAND"
+            partitions_folder = self._get_partitions_folder()
+            if not partitions_folder:
+                self._dialog("Error", "NAND archive folder not found. Please set 'Partitions Folder (NAND)...' in Settings.")
+                return
 
             user_archive = "USER-64.7z" if target_size_gb > 40 else "USER-32.7z"
             if not self._verify_nand_archives([user_archive], partitions_folder):
@@ -3168,12 +3217,9 @@ class SwitchGuiApp(tk.Tk):
         Automatically detect and extract the appropriate donor NAND based on eMMC size.
         Returns the path to the extracted donor NAND image.
         """
-        try:
-            script_dir = Path(__file__).parent
-        except NameError:
-            script_dir = Path.cwd()
-        
-        nand_lib_dir = script_dir / "lib" / "NAND"
+        nand_lib_dir = self._get_partitions_folder()
+        if not nand_lib_dir:
+            return None
         
         if target_size_gb > 40:
             donor_archive, donor_bin_name, size = (nand_lib_dir / "donor64.7z", "rawnand64.bin", "64GB")
@@ -3395,9 +3441,6 @@ class SwitchGuiApp(tk.Tk):
             self._log("Level 3 will completely overwrite your Switch's eMMC with a reconstructed NAND.")
             self._log("This is irreversible. Ensure you have backups and a stable connection.")
 
-        if not self._check_disk_space(60):
-            return
-
         # Determine target size for offline mode or get from physical eMMC
         if self.offline_mode.get():
             self._log("\n[STEP 1/8] Determining NAND size from donor PRODINFO...")
@@ -3458,6 +3501,11 @@ class SwitchGuiApp(tk.Tk):
                 return
 
             self._log(f"SUCCESS: User confirmed target eMMC at {target_path} ({target_drive['size']})")
+
+        required_space = self._required_temp_space_gb(target_size_gb)
+        self._log(f"--- Target NAND size: {target_size_gb:.1f}GB. Required temp free space: {required_space}GB.")
+        if not self._check_disk_space(required_space):
+            return
         
         self._log(f"\n[STEP 2/8] Preparing donor NAND skeleton...")
 
@@ -3523,7 +3571,10 @@ class SwitchGuiApp(tk.Tk):
         
         self._log(f"\n[STEP 5/8] Preparing all partition data from donor archives...")
         nx_exe = self.paths['nxnandmanager'].get()
-        partitions_folder = Path(self.paths['partitions_folder'].get())
+        partitions_folder = self._get_partitions_folder()
+        if not partitions_folder:
+            self._dialog("Error", "NAND archive folder not found. Please set 'Partitions Folder (NAND)...' in Settings.")
+            return
         user_archive = "USER-64.7z" if target_size_gb > 40 else "USER-32.7z"
         if not self._verify_nand_archives(["SYSTEM.7z", "PRODINFOF.7z", "SAFE.7z", user_archive], partitions_folder):
             return
@@ -4543,9 +4594,6 @@ class SwitchGuiApp(tk.Tk):
             self._log("\n--- WARNING ---")
             self._log("The Level 2 process will write directly to your Switch's eMMC.")
 
-        if not self._check_disk_space(60):
-            return
-
         # Get NAND source (file or device)
         if not self.offline_mode.get():
             self._log("\n[STEP 1/7] Please connect your Switch in Hekate's eMMC RAW GPP mode (Read-Only OFF).")
@@ -4556,13 +4604,20 @@ class SwitchGuiApp(tk.Tk):
         if not nand_source:
             return
 
-        nx_exe = self.paths['nxnandmanager'].get()
+        nand_size_gb = self._estimate_nand_size_gb(nand_source, source_type)
+        required_space = self._required_temp_space_gb(nand_size_gb)
+        if nand_size_gb is not None:
+            self._log(f"--- Detected NAND size: {nand_size_gb:.1f}GB. Required temp free space: {required_space}GB.")
+        else:
+            self._log(f"--- Could not determine NAND size. Using default required temp free space: {required_space}GB.")
+        if not self._check_disk_space(required_space):
+            return
 
-        try:
-            script_dir = Path(__file__).parent
-        except NameError:
-            script_dir = Path.cwd()
-        partitions_folder = script_dir / "lib" / "NAND"
+        nx_exe = self.paths['nxnandmanager'].get()
+        partitions_folder = self._get_partitions_folder()
+        if not partitions_folder:
+            self._dialog("Error", "NAND archive folder not found. Please set 'Partitions Folder (NAND)...' in Settings.")
+            return
         keyset_path = self.paths['keys'].get()
 
         self._log(f"\n[STEP 2/7] Acquiring PRODINFO from {source_type}...")

@@ -60,13 +60,17 @@ jobs:
           if highlights:
               tweet_lines.append("\n".join(f"• {h}" for h in highlights))
 
-          tweet_lines.append(f"Download: {url}")
+          download_line = f"Download: {url}"
+          body_text = "\n\n".join(tweet_lines)
 
-          tweet_text = "\n\n".join(tweet_lines)
+          # Keep the release URL intact. X counts URLs as shortened links, but
+          # build safely so the visible post never loses the Download line.
+          separator = "\n\n"
+          max_body_len = 280 - len(separator) - len(download_line)
+          if len(body_text) > max_body_len:
+              body_text = body_text[:max(0, max_body_len - 3)].rstrip() + "..."
 
-          # Truncate to 280 chars if needed
-          if len(tweet_text) > 280:
-              tweet_text = tweet_text[:277] + "..."
+          tweet_text = f"{body_text}{separator}{download_line}"
 
           print(f"Tweet preview:\n{tweet_text}\n")
 
