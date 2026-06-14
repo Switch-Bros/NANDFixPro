@@ -1,12 +1,12 @@
 # NAND Fix Pro
 
 
-[![Version](https://img.shields.io/badge/version-1.0.0-blue.svg)](https://github.com/sthetix/NANDFixPro/releases)
+[![Version](https://img.shields.io/badge/version-2.2.1-blue.svg)](https://github.com/sthetix/NANDFixPro/releases)
 [![Platform](https://img.shields.io/badge/platform-Windows-0078D4.svg)](https://www.microsoft.com/windows/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/sthetix/NANDFixPro/main/images/title.png" alt="Title Image" width="75%">
+  <img src="https://raw.githubusercontent.com/sthetix/NANDFixPro/main/images/preview.jpg" alt="Preview Image" width="75%">
 </p>
 
 A comprehensive GUI tool for Nintendo Switch NAND repair, designed to simplify complex recovery processes into a user-friendly, step-by-step interface.
@@ -19,10 +19,12 @@ NAND Fix Pro provides three distinct levels of repair, from a simple system file
 ## Features
 
 -   **Three-Tiered Repair System**: Choose the right level of repair for your specific issue.
+-   **Live and Offline Modes**: Work directly with a Hekate-mounted eMMC/emuMMC device, or repair a NAND backup file without writing to hardware.
 -   **User-Friendly GUI**: A modern, dark-themed interface that guides you through every step. No command-line knowledge required.
 -   **Automatic Path Detection**: The application automatically finds its required tools from the `lib` folder.
--   **Safety First**: Critical actions require user confirmation to prevent accidental data loss. Buttons remain disabled until all required files and paths are correctly configured.
+-   **Safety First**: Critical actions require user confirmation, Hekate target validation, archive integrity checks, and required file preflights before repair operations.
 -   **Erista & Mariko Support**: Automatically detects the console model from its PRODINFO and applies the correct settings for boot file generation.
+-   **Split NAND and emuMMC Support**: Detects Hekate split NAND backups and emuMMC SD file layouts, then joins and re-splits output when needed.
 -   **Automated Dependency Management**: The included launcher ensures Python and required libraries are installed automatically.
 -   **Built-in Admin Elevation**: Automatically prompts for administrator rights, which are required for direct eMMC access.
 -   **Robust Logging**: All operations are logged to the screen and saved in an `error_log.txt` on crash, making troubleshooting easy.
@@ -48,6 +50,26 @@ NAND Fix Pro provides three distinct levels of repair, from a simple system file
 * **When to use it**: This is the final option for a completely dead or lost NAND where even the original PRODINFO is gone or corrupt.
 * **Outcome**: A brand new, functional NAND is written to the eMMC. **This is a total overwrite.**
 
+---
+
+## Supported Workflows
+
+-   **Live eMMC repair**: Connect the Switch through Hekate `eMMC RAW GPP` with read-only disabled. The app detects the Hekate hardware ID before writing.
+-   **Live emuMMC repair**: Connect a Hekate-exposed emuMMC raw GPP target when working with SD-based emuMMC.
+-   **Offline NAND repair**: Select a `RAWNAND.bin` backup and `prod.keys` to repair a file instead of a physical device.
+-   **Split NAND repair**: Select `rawnand.bin.00` or emuMMC-style `00` and the app joins the parts for processing. When needed, it prepares re-split output for SD use.
+-   **BOOT file handoff**: After generating `BOOT0` and `BOOT1`, use the in-app `Copy BOOT to SD` flow to place them into the detected Hekate restore folder.
+
+---
+
+## Tools & Advanced Options
+
+-   **Get Keys from SD**: Detects a Hekate-mounted SD card and imports `prod.keys`; Level 3 can also import donor `PRODINFO` when available.
+-   **Advanced USER Partition Fix**: Repairs only the USER partition from clean donor data. This still erases user data, but avoids a full rebuild when the damage is isolated.
+-   **PRODINFO Editor**: Edit serial, WiFi region, and color fields, then recalculate checksums and verify PRODINFO integrity.
+-   **Console Type Override**: Manually choose Erista or Mariko if automatic PRODINFO-based model detection is not appropriate.
+-   **Settings**: Override tool paths, the NAND partitions folder, temporary directory, and offline mode behavior.
+-   **Log Controls**: Save logs for troubleshooting, clear the current log, or reset the app state for a new operation.
 
 ---
 
@@ -67,7 +89,7 @@ All other required tools and donor partitions are included in the release packag
 
 ### Download and Extract
 
-1. Download the `NAND-Fix-Pro-v2.0.0.exe` file from the [latest release page](https://github.com/sthetix/NANDFixPro/releases).
+1. Download the `NAND-Fix-Pro-v2.2.1.exe` file from the [latest release page](https://github.com/sthetix/NANDFixPro/releases).
 2. **Important**: The downloaded `.exe` file is actually a **7-Zip self-extracting archive**. When you run it or extract it, Windows Defender may flag the `NANDFixPro.exe` launcher as a potential threat.
 
 ### False Positive Warning
@@ -91,7 +113,7 @@ To use NAND Fix Pro, you'll need to add an exclusion to Windows Defender:
 4. Scroll down to **Exclusions** and click **Add or remove exclusions**
 5. Click **Add an exclusion** and select **Folder**
 6. Navigate to and select the folder where you plan to extract NAND Fix Pro
-7. Now extract the `NAND-Fix-Pro-v2.0.0.exe` to that folder
+7. Now extract the `NAND-Fix-Pro-v2.2.1.exe` to that folder
 
 #### Method 2: Restore Quarantined File
 
@@ -133,13 +155,13 @@ Getting started is designed to be as simple as possible.
 * Select **eMMC RAW GPP**. This makes your Switch's eMMC accessible to your computer.
 
 ### 3. Run the Tool
-* Download the `NAND-Fix-Pro-v1.0.0.zip` file from the [latest release page](https://github.com/sthetix/NANDFixPro/releases).
-* Extract the entire contents of the ZIP file to a folder on your computer.
+* Download the `NAND-Fix-Pro-v2.2.1.exe` file from the [latest release page](https://github.com/sthetix/NANDFixPro/releases).
+* Run or extract the self-extracting archive to a folder on your computer.
 * Simply **double-click the `NANDFixPro.exe`** file.
 
 The launcher will automatically perform a one-time setup:
-- It will install an embedded, portable version of Python.
-- It will install the necessary Python dependencies (`wmi`).
+- It will install the bundled Python runtime if needed.
+- It will install the necessary Python dependencies (`wmi`, `psutil`, `pywin32`).
 - It will then start the NAND Fix Pro application for you.
 
 ### 4. Flash the Generated Boot Files
@@ -158,6 +180,13 @@ NAND-Fix-Pro/
 │
 ├── NANDFixPro.exe
 ├── nandfixpro.py
+├── Installers/
+│   ├── osfmount.exe
+│   ├── osfmount.exe.sha256
+│   ├── python-3.13.7-amd64.exe
+│   ├── python-3.13.7-amd64.exe.sha256
+│   ├── windowsdesktop-runtime-8.0.20-win-x64.exe
+│   └── windowsdesktop-runtime-8.0.20-win-x64.exe.sha256
 │
 └───lib/
     ├── 7z/
@@ -169,12 +198,19 @@ NAND-Fix-Pro/
     │
     └───NAND/
         ├── donor32.7z
+        ├── donor32.7z.sha256
         ├── donor64.7z
+        ├── donor64.7z.sha256
         ├── PRODINFOF.7z
+        ├── PRODINFOF.7z.sha256
         ├── SAFE.7z
+        ├── SAFE.7z.sha256
         ├── SYSTEM.7z
+        ├── SYSTEM.7z.sha256
         ├── USER-32.7z
-        └── USER-64.7z
+        ├── USER-32.7z.sha256
+        ├── USER-64.7z
+        └── USER-64.7z.sha256
 ```
 
 ---
