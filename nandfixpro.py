@@ -590,6 +590,15 @@ class PRODINFOEditorDialog(tk.Toplevel):
         verify_button = ttk.Button(verify_frame, text="Verify PRODINFO Integrity", 
                                 command=self._verify_integrity, style="TButton")
         verify_button.pack(pady=5)    
+
+        # Export section
+        export_frame = ttk.LabelFrame(main_frame, text="Export", padding="10")
+        export_frame.pack(fill="x", pady=(0, 10))
+
+        ttk.Button(export_frame, text="Save Decrypted As...",
+                   command=self._save_decrypted_as, style="TButton").pack(side=tk.LEFT, padx=(0, 8), pady=5)
+        ttk.Button(export_frame, text="Export Encrypted...",
+                   command=self._export_encrypted, style="TButton").pack(side=tk.LEFT, pady=5)
         
         # Buttons
         button_frame = ttk.Frame(main_frame, style="Dark.TFrame")
@@ -664,21 +673,7 @@ class PRODINFOEditorDialog(tk.Toplevel):
     def on_apply(self):
         """Apply changes and save PRODINFO"""
         try:
-            # Apply serial
-            serial = self.serial_var.get().strip()
-            if len(serial) == 14:
-                self.engine.set_serial(serial)
-            
-            # Apply region
-            region = self.region_var.get()
-            if region in REGION_CODE_MAP:
-                self.engine.set_wifi_region(region)
-            
-            # Apply colors
-            for color_key in self.color_vars:
-                color_hex = self.color_vars[color_key].get().strip()
-                if len(color_hex) == 6 and all(c in "0123456789ABCDEF" for c in color_hex.upper()):
-                    self.engine.set_color(color_key, color_hex)
+            self._apply_current_values_to_engine()
             
             # Save file
             success, message = self.engine.save_file()
@@ -692,6 +687,109 @@ class PRODINFOEditorDialog(tk.Toplevel):
                 
         except Exception as e:
             CustomDialog(self.parent, title="Error", message=f"Failed to apply changes:\n{e}")
+
+    def _apply_current_values_to_engine(self):
+        """Apply current form values to the loaded PRODINFO data without saving."""
+        serial = self.serial_var.get().strip()
+        if len(serial) == 14:
+            self.engine.set_serial(serial)
+
+        region = self.region_var.get()
+        if region in REGION_CODE_MAP:
+            self.engine.set_wifi_region(region)
+
+        for color_key in self.color_vars:
+            color_hex = self.color_vars[color_key].get().strip()
+            if len(color_hex) == 6 and all(c in "0123456789ABCDEF" for c in color_hex.upper()):
+                self.engine.set_color(color_key, color_hex)
+
+    def _save_decrypted_as(self):
+        """Save edited PRODINFO as a decrypted CAL0 file."""
+        try:
+            output_path = filedialog.asksaveasfilename(
+                title="Save Decrypted PRODINFO",
+                defaultextension=".dec",
+                filetypes=[("Decrypted PRODINFO", "*.dec"), ("PRODINFO File", "*.*")],
+                initialfile="prodinfo_edited.dec"
+            )
+            if not output_path:
+                return
+
+            self._apply_current_values_to_engine()
+            success, message = self.engine.save_file(output_path)
+
+            if success:
+                self.result = True
+                CustomDialog(self.parent, title="Success", message=f"Decrypted PRODINFO saved:\n{output_path}")
+            else:
+                CustomDialog(self.parent, title="Save Error", message=f"Failed to save decrypted PRODINFO:\n{message}")
+        except Exception as e:
+            CustomDialog(self.parent, title="Error", message=f"Failed to save decrypted PRODINFO:\n{e}")
+
+    def _export_encrypted(self):
+        """Export edited PRODINFO encrypted with the configured prod.keys."""
+        try:
+            keyset_path = self.parent.paths["keys"].get()
+            nx_exe = self.parent.paths["nxnandmanager"].get()
+
+            if not keyset_path or not Path(keyset_path).is_file():
+                keyset_path = filedialog.askopenfilename(
+                    title="Select prod.keys",
+                    filetypes=[("Keys File", "*.keys"), ("All files", "*.*")]
+                )
+                if not keyset_path:
+                    return
+                self.parent.paths["keys"].set(os.path.normpath(keyset_path))
+                self.parent._save_config()
+
+            if not nx_exe or not Path(nx_exe).is_file():
+                nx_exe = filedialog.askopenfilename(
+                    title="Select NxNandManager.exe",
+                    filetypes=[("NxNandManager Executable", "NxNandManager.exe"), ("Executable", "*.exe"), ("All files", "*.*")]
+                )
+                if not nx_exe:
+                    return
+                self.parent.paths["nxnandmanager"].set(os.path.normpath(nx_exe))
+                self.parent._save_config()
+
+            output_path = filedialog.asksaveasfilename(
+                title="Export Encrypted PRODINFO",
+                defaultextension=".bin",
+                filetypes=[("Encrypted PRODINFO", "*.bin"), ("PRODINFO File", "*.*")],
+                initialfile="PRODINFO_encrypted.bin"
+            )
+            if not output_path:
+                return
+
+            self._apply_current_values_to_engine()
+
+            with tempfile.TemporaryDirectory(prefix="nandfixpro_prodinfo_") as temp_dir:
+                decrypted_path = Path(temp_dir) / "PRODINFO.dec"
+                success, message = self.engine.save_file(decrypted_path)
+                if not success:
+                    CustomDialog(self.parent, title="Export Error", message=f"Failed to prepare decrypted PRODINFO:\n{message}")
+                    return
+
+                export_cmd = [
+                    nx_exe, "-i", str(decrypted_path), "-o", os.path.normpath(output_path),
+                    "-part=PRODINFO", "-e", "-keyset", keyset_path, "FORCE"
+                ]
+                self.parent._log("--- Exporting encrypted PRODINFO...")
+                return_code, command_output = self.parent._run_command(export_cmd)
+
+            if return_code == 0 and Path(output_path).exists():
+                self.result = True
+                CustomDialog(self.parent, title="Success", message=f"Encrypted PRODINFO exported:\n{output_path}")
+            else:
+                CustomDialog(
+                    self.parent,
+                    title="Export Error",
+                    message="Failed to export encrypted PRODINFO.\n\n"
+                            "NxNandManager may not support standalone PRODINFO file output with this command.\n"
+                            f"\nOutput:\n{command_output}"
+                )
+        except Exception as e:
+            CustomDialog(self.parent, title="Error", message=f"Failed to export encrypted PRODINFO:\n{e}")
     
     def on_cancel(self):
         """Cancel and close dialog"""
@@ -917,10 +1015,11 @@ class SwitchGuiApp(tk.Tk):
         super().__init__()
         self.iconbitmap('images/icon.ico')
         set_app_user_model_id('com.nandfixpro.app')
-        self.version = "2.2.0"
+        self.version = "2.2.1"
         self.title(f"NAND Fix Pro v{self.version}")
-        self.geometry("650x750") # Increased height to accommodate offline mode file selectors
-        self.resizable(False, False)
+        self.geometry("860x840")
+        self.minsize(760, 680)
+        self.resizable(True, True)
         
         # --- PATHS & STATE VARIABLES ---
         self.config_file = "config.ini"
@@ -935,6 +1034,13 @@ class SwitchGuiApp(tk.Tk):
         
         # Offline mode toggle
         self.offline_mode = tk.BooleanVar(value=False)
+        self.guided_mode_seen = False
+        self.guided_mode_active = False
+        self.guided_callout = None
+        self.guided_callout_after_id = None
+        self.mode_status_text = tk.StringVar(value="Live Mode")
+        self.status_text = tk.StringVar(value="Ready")
+        self.progress_value = tk.IntVar(value=0)
         
         self.level_requirements = {
             1: ["firmware", "7z", "emmchaccgen", "nxnandmanager", "osfmount"],
@@ -983,11 +1089,13 @@ class SwitchGuiApp(tk.Tk):
         self._setup_styles()
         self._load_config()
         self._setup_widgets()
+        self._run_startup_preflight()
         self._validate_paths_and_update_buttons()
         self.center_window()
 
         # Set up cleanup on exit
         self.protocol("WM_DELETE_WINDOW", self._on_closing)
+        self.after(600, self._start_guided_mode_if_needed)
         
     def _create_main_button_row(self, parent_frame, process_name, command, button_ref):
         """Creates the consistent row of main buttons for each tab."""
@@ -997,20 +1105,20 @@ class SwitchGuiApp(tk.Tk):
         if not self.offline_mode.get():
             get_keys_button = ttk.Button(button_frame, text="Get Keys from SD",
                                          command=self._get_keys_from_sd, style="Active.TButton")
-            get_keys_button.pack(side=tk.LEFT, padx=10, ipady=5, ipadx=15)
+            get_keys_button.pack(side=tk.LEFT, padx=(0, 10), ipady=5, ipadx=15)
             self.get_keys_buttons.append(get_keys_button)
 
         # Main process button (center/left depending on mode)
         button = ttk.Button(button_frame, text=f"Start {process_name} Process",
                             command=command, style="Disabled.TButton", state="disabled")
-        button.pack(side=tk.LEFT, padx=10, ipady=5, ipadx=15)
+        button.pack(side=tk.LEFT, padx=(0, 10), ipady=5, ipadx=18)
         setattr(self, button_ref, button)
 
         # Copy BOOT files button (right) - Only in ONLINE mode
         if not self.offline_mode.get():
             copy_boot_button = ttk.Button(button_frame, text="Copy BOOT to SD",
                                           command=self._copy_boot_files_to_sd, style="Disabled.TButton", state="disabled")
-            copy_boot_button.pack(side=tk.LEFT, padx=10, ipady=5, ipadx=15)
+            copy_boot_button.pack(side=tk.LEFT, ipady=5, ipadx=15)
             self.copy_boot_buttons.append(copy_boot_button)
 
         return button_frame
@@ -1019,6 +1127,14 @@ class SwitchGuiApp(tk.Tk):
 
     def _update_progress(self, progress_text):
         """Displays and updates a progress bar on a single line in the log."""
+        percent_match = re.search(r"(\d{1,3})%", progress_text)
+        if percent_match:
+            percent = max(0, min(100, int(percent_match.group(1))))
+            self.progress_value.set(percent)
+            self.status_text.set(progress_text)
+        else:
+            self.status_text.set(progress_text)
+
         if hasattr(self, 'log_widget') and self.log_widget:
             self.log_widget.config(state="normal")
 
@@ -1130,13 +1246,25 @@ class SwitchGuiApp(tk.Tk):
         self.style = ttk.Style(self)
         self.style.theme_use('clam')
 
-        self.BG_COLOR = "#2e2e2e"
-        self.FG_COLOR = "#fafafa"
-        self.BG_LIGHT = "#3c3c3c"
-        self.BG_DARK = "#252525"
-        self.ACCENT_COLOR = "#0078d4"
-        self.ACCENT_ACTIVE = "#005a9e"
+        self.BG_COLOR = "#222222"
+        self.FG_COLOR = "#ffffff"
+        self.BG_LIGHT = "#303030"
+        self.BG_DARK = "#1c1c1c"
+        self.PANEL_COLOR = "#2b2b2b"
+        self.FIELD_COLOR = "#1f1f1f"
+        self.BORDER_COLOR = "#444444"
+        self.ACCENT_COLOR = "#375a7f"
+        self.ACCENT_ACTIVE = "#2b4764"
+        self.ACCENT_SOFT = "#22384f"
+        self.SUCCESS_COLOR = "#00bc8c"
+        self.LEVEL1_COLOR = "#00bc8c"
+        self.LEVEL1_ACTIVE = "#009b75"
+        self.LEVEL2_COLOR = "#f39c12"
+        self.LEVEL2_ACTIVE = "#c87f0a"
+        self.LEVEL3_COLOR = "#e74c3c"
+        self.LEVEL3_ACTIVE = "#c0392b"
         self.DISABLED_FG = "#888888"
+        self.MUTED_FG = "#adb5bd"
         self.FONT_FAMILY = "Segoe UI"
 
         self.configure(background=self.BG_COLOR)
@@ -1144,8 +1272,13 @@ class SwitchGuiApp(tk.Tk):
         self.style.configure('.', background=self.BG_COLOR, foreground=self.FG_COLOR, font=(self.FONT_FAMILY, 10))
         self.style.configure("TFrame", background=self.BG_COLOR)
         self.style.configure("Dark.TFrame", background=self.BG_DARK)
+        self.style.configure("Panel.TFrame", background=self.PANEL_COLOR)
         self.style.configure("TLabel", background=self.BG_COLOR, foreground=self.FG_COLOR, font=(self.FONT_FAMILY, 10))
         self.style.configure("Dark.TLabel", background=self.BG_DARK, foreground=self.FG_COLOR, font=(self.FONT_FAMILY, 10))
+        self.style.configure("Panel.TLabel", background=self.PANEL_COLOR, foreground=self.FG_COLOR, font=(self.FONT_FAMILY, 10))
+        self.style.configure("Muted.TLabel", background=self.BG_COLOR, foreground=self.MUTED_FG, font=(self.FONT_FAMILY, 9))
+        self.style.configure("Header.TLabel", background=self.BG_COLOR, foreground=self.FG_COLOR, font=(self.FONT_FAMILY, 11, 'bold'))
+        self.style.configure("AccentHeader.TLabel", background=self.BG_COLOR, foreground=self.SUCCESS_COLOR, font=(self.FONT_FAMILY, 11, 'bold'))
         self.style.configure("TCheckbutton", font=(self.FONT_FAMILY, 10))
         self.style.map("TCheckbutton",
                        background=[('active', self.BG_COLOR)],
@@ -1164,6 +1297,9 @@ class SwitchGuiApp(tk.Tk):
         self.style.configure("TLabelFrame", background=self.BG_COLOR, borderwidth=1, relief="solid")
         self.style.configure("TLabelFrame.Label", background=self.BG_COLOR, foreground=self.FG_COLOR,
                              font=(self.FONT_FAMILY, 11, 'bold'))
+        self.style.configure("Card.TLabelframe", background=self.PANEL_COLOR, borderwidth=1, relief="solid")
+        self.style.configure("Card.TLabelframe.Label", background=self.PANEL_COLOR, foreground=self.FG_COLOR,
+                             font=(self.FONT_FAMILY, 11, 'bold'))
         
         # --- THIS IS THE CORRECTED PART FOR LEFT-ALIGNED TABS ---
         self.style.configure("TNotebook", background=self.BG_COLOR, borderwidth=0)
@@ -1175,39 +1311,48 @@ class SwitchGuiApp(tk.Tk):
                              borderwidth=0,
                              anchor='w') # Anchor text to the left
         self.style.map("TNotebook.Tab",
-                       background=[("selected", self.BG_COLOR), ("active", self.ACCENT_COLOR)])
+                       background=[("selected", self.ACCENT_COLOR), ("active", self.ACCENT_SOFT)],
+                       foreground=[("selected", "#ffffff"), ("active", "#ffffff")])
                        # 'expand' property is REMOVED to stop stretching
 
-        self.style.configure("Active.TButton", background="#0078d4", foreground="#ffffff")
+        self.style.configure("Active.TButton", background=self.ACCENT_COLOR, foreground="#ffffff")
         self.style.map("Active.TButton",
-                       background=[('!disabled', '#0078d4'), ('active', '#005a9e'), ('disabled', self.BG_DARK)],
+                       background=[('!disabled', self.ACCENT_COLOR), ('active', self.ACCENT_ACTIVE), ('disabled', self.BG_DARK)],
                        foreground=[('!disabled', '#ffffff'), ('disabled', self.DISABLED_FG)])
+        for style_name, color, active_color in [
+            ("Level1.Active.TButton", self.LEVEL1_COLOR, self.LEVEL1_ACTIVE),
+            ("Level2.Active.TButton", self.LEVEL2_COLOR, self.LEVEL2_ACTIVE),
+            ("Level3.Active.TButton", self.LEVEL3_COLOR, self.LEVEL3_ACTIVE),
+        ]:
+            self.style.configure(style_name, background=color, foreground="#ffffff")
+            self.style.map(style_name,
+                           background=[('!disabled', color), ('active', active_color), ('disabled', self.BG_DARK)],
+                           foreground=[('!disabled', '#ffffff'), ('disabled', self.DISABLED_FG)])
 
-        self.style.configure("Completed.TButton", background="#107c10", foreground="#ffffff")
+        self.style.configure("Completed.TButton", background=self.SUCCESS_COLOR, foreground="#ffffff")
         self.style.map("Completed.TButton",
-                       background=[('!disabled', '#107c10'), ('active', '#0e6e0e'), ('disabled', self.BG_DARK)],
+                       background=[('!disabled', self.SUCCESS_COLOR), ('active', '#0e6e0e'), ('disabled', self.BG_DARK)],
                        foreground=[('!disabled', '#ffffff'), ('disabled', self.DISABLED_FG)])
 
         self.style.configure("Disabled.TButton", background=self.BG_DARK, foreground=self.DISABLED_FG)
 
-        # Entry styles - FIXED for visibility
         self.style.configure("TEntry", 
-                           background="#ffffff",        # White background
-                           foreground="#000000",        # Black text
-                           fieldbackground="#ffffff",   # White field
+                           background=self.FIELD_COLOR,
+                           foreground=self.FG_COLOR,
+                           fieldbackground=self.FIELD_COLOR,
                            borderwidth=1,
-                           insertcolor="#000000")       # Black cursor
+                           insertcolor=self.FG_COLOR)
 
-        # Combobox styles - FIXED for visibility  
         self.style.configure("TCombobox",
-                           background="#ffffff",        # White background
-                           foreground="#000000",        # Black text
-                           fieldbackground="#ffffff",   # White field
+                           background=self.FIELD_COLOR,
+                           foreground=self.FG_COLOR,
+                           fieldbackground=self.FIELD_COLOR,
                            borderwidth=1)
         self.style.map("TCombobox",
-                      foreground=[('readonly', '#000000'),    # Black text in readonly
-                                 ('active', '#000000')])      # Black text when active
-
+                      foreground=[('readonly', self.FG_COLOR),
+                                  ('active', self.FG_COLOR)],
+                      fieldbackground=[('readonly', self.FIELD_COLOR),
+                                       ('active', self.FIELD_COLOR)])
     # THIS IS THE NEW, MORE RELIABLE FUNCTION
     def _detect_switch_sd_card_wmi(self):
         """Detect Switch SD card by iterating logical drives and checking their parent hardware ID."""
@@ -1467,14 +1612,184 @@ class SwitchGuiApp(tk.Tk):
                         "size": size_str,
                         "size_gb": size_gb,
                         "model": disk.Model,
-                        "type": drive_type
+                        "type": drive_type,
+                        "pnp_id": pnp_id,
+                        "serial": getattr(disk, "SerialNumber", None) or "Unknown",
+                        "interface": getattr(disk, "InterfaceType", None) or "Unknown",
+                        "media_type": getattr(disk, "MediaType", None) or "Unknown",
                     }
                     potential_drives.append(drive_info)
                     self._log(f"--- Found Switch {drive_type} drive: {drive_info['path']} ({drive_info['size']})")
 
             if not potential_drives:
                 self._log("--- No Switch eMMC/emuMMC GPP drive with Hekate hardware ID was found.")
-            return potential_drives    
+            return potential_drives
+
+    def _get_validated_hekate_drive(self, target_drive):
+            """Re-query WMI and validate a physical drive before any destructive write."""
+            target_norm = str(target_drive).strip().upper()
+
+            for drive in self._detect_switch_drives_wmi():
+                path_norm = str(drive.get("path", "")).strip().upper()
+                if path_norm != target_norm:
+                    continue
+
+                pnp_id = drive.get("pnp_id", "")
+                has_hekate_id = "VEN_HEKATE" in pnp_id and (
+                    "PROD_EMMC_GPP" in pnp_id or "PROD_SD_GPP" in pnp_id
+                )
+                if not has_hekate_id:
+                    self._log(f"ERROR: Target {target_drive} no longer has a Hekate eMMC/emuMMC hardware ID.")
+                    return None
+
+                size_gb = drive.get("size_gb", 0.0)
+                if size_gb and not (20.0 <= size_gb <= 70.0):
+                    self._log(f"ERROR: Target {target_drive} has unexpected size {drive.get('size')}.")
+                    self._log("ERROR: Refusing write because Switch eMMC/emuMMC targets should be roughly 32GB or 64GB.")
+                    return None
+
+                return drive
+
+            self._log(f"ERROR: Target {target_drive} was not found in the current Hekate drive scan.")
+            return None
+
+    def _validate_physical_target_for_write(self, target_drive, operation_name="write"):
+            """Final safety gate for physical-drive writes."""
+            if not str(target_drive).upper().startswith(r"\\.\PHYSICALDRIVE"):
+                self._log(f"ERROR: Refusing physical {operation_name}: invalid target path {target_drive}")
+                return False
+
+            self._log(f"--- Re-validating target before physical {operation_name}: {target_drive}")
+            drive = self._get_validated_hekate_drive(target_drive)
+            if not drive:
+                self._dialog(
+                    "Target Validation Failed",
+                    "The selected physical drive no longer validates as a Hekate eMMC/emuMMC target.\n\n"
+                    "The write was cancelled for safety. Reconnect Hekate eMMC RAW GPP and try again."
+                )
+                return False
+
+            self._log("--- Physical target validation passed:")
+            self._log(f"    Path: {drive.get('path')}")
+            self._log(f"    Type: {drive.get('type')}")
+            self._log(f"    Size: {drive.get('size')}")
+            self._log(f"    Model: {drive.get('model')}")
+            self._log(f"    Serial: {drive.get('serial')}")
+            self._log(f"    Interface: {drive.get('interface')}")
+            return True
+
+    def _verify_sha256_sidecar(self, file_path):
+            """Verify a file against a same-name .sha256 sidecar."""
+            file_path = Path(file_path)
+            hash_path = Path(str(file_path) + ".sha256")
+
+            if not file_path.is_file():
+                self._log(f"ERROR: Required archive not found: {file_path}")
+                return False
+
+            if not hash_path.is_file():
+                self._log(f"ERROR: Missing SHA256 sidecar: {hash_path}")
+                return False
+
+            try:
+                expected_hash = hash_path.read_text(encoding="utf-8").split()[0].strip().lower()
+            except Exception as e:
+                self._log(f"ERROR: Could not read SHA256 sidecar {hash_path}: {e}")
+                return False
+
+            if len(expected_hash) != 64 or any(c not in "0123456789abcdef" for c in expected_hash):
+                self._log(f"ERROR: Invalid SHA256 sidecar format: {hash_path}")
+                return False
+
+            try:
+                sha256 = hashlib.sha256()
+                with open(file_path, "rb") as f:
+                    for chunk in iter(lambda: f.read(1024 * 1024), b""):
+                        sha256.update(chunk)
+                actual_hash = sha256.hexdigest()
+            except Exception as e:
+                self._log(f"ERROR: Could not hash {file_path}: {e}")
+                return False
+
+            if actual_hash != expected_hash:
+                self._log(f"ERROR: SHA256 mismatch for {file_path.name}")
+                self._log(f"Expected: {expected_hash}")
+                self._log(f"Actual:   {actual_hash}")
+                return False
+
+            self._log(f"--- SHA256 verified: {file_path.name}")
+            return True
+
+    def _verify_nand_archives(self, archive_names, partitions_folder=None):
+            """Verify required NAND archives before extraction or write operations."""
+            base_path = Path(partitions_folder or self.paths["partitions_folder"].get())
+            self._log("--- Verifying NAND archive integrity...")
+
+            for archive_name in archive_names:
+                if not self._verify_sha256_sidecar(base_path / archive_name):
+                    self._dialog(
+                        "Archive Verification Failed",
+                        f"Failed to verify NAND archive:\n{archive_name}\n\n"
+                        "The archive is missing, corrupted, or its .sha256 sidecar is missing/invalid.\n"
+                        "Please restore the original release files and try again."
+                    )
+                    return False
+
+            return True
+
+    def _get_app_base_path(self):
+            try:
+                return Path(__file__).parent
+            except NameError:
+                return Path.cwd()
+
+    def _get_required_runtime_files(self):
+            base_path = self._get_app_base_path()
+            nand_path = base_path / "lib" / "NAND"
+            archive_names = [
+                "SYSTEM.7z",
+                "PRODINFOF.7z",
+                "SAFE.7z",
+                "USER-32.7z",
+                "USER-64.7z",
+                "donor32.7z",
+                "donor64.7z",
+            ]
+
+            required_files = [
+                base_path / "lib" / "7z" / "7z.exe",
+                base_path / "lib" / "NxNandManager" / "NxNandManager.exe",
+                base_path / "lib" / "EmmcHaccGen" / "EmmcHaccGen.exe",
+            ]
+            for archive_name in archive_names:
+                archive_path = nand_path / archive_name
+                required_files.append(archive_path)
+                required_files.append(Path(str(archive_path) + ".sha256"))
+
+            return required_files
+
+    def _run_startup_preflight(self):
+            """Fail early when release files are missing."""
+            missing_files = [path for path in self._get_required_runtime_files() if not path.is_file()]
+            if not missing_files:
+                self._log("--- Startup preflight passed: required runtime files are present.")
+                return True
+
+            missing_text = "\n".join(f"- {path}" for path in missing_files[:20])
+            if len(missing_files) > 20:
+                missing_text += f"\n...and {len(missing_files) - 20} more"
+
+            self._log("ERROR: Startup preflight failed. Required runtime files are missing:")
+            for path in missing_files:
+                self._log(f"  - {path}")
+
+            self._dialog(
+                "Missing Release Files",
+                "NAND Fix Pro is missing required release files.\n\n"
+                f"{missing_text}\n\n"
+                "Restore the full release package before running repair workflows."
+            )
+            return False
 
     def _setup_widgets(self):
         menubar = tk.Menu(self, background=self.BG_LIGHT, foreground=self.FG_COLOR,
@@ -1492,12 +1807,27 @@ class SwitchGuiApp(tk.Tk):
             activebackground=self.ACCENT_COLOR, activeforeground=self.FG_COLOR,
             relief="flat", borderwidth=0)
         menubar.add_cascade(label="Help", menu=help_menu)
-        help_menu.add_command(label="Usage Guide", command=self._show_usage_guide_window)
+        help_menu.add_command(label="Start Guided Mode", command=self._start_guided_mode)
         help_menu.add_separator()
         help_menu.add_command(label="About NAND Fix Pro", command=self._show_about_window)
 
+        shell = ttk.Frame(self, padding=(18, 14, 18, 16))
+        shell.pack(expand=True, fill="both")
+        shell.columnconfigure(0, weight=1)
+        shell.rowconfigure(1, weight=2)
+        shell.rowconfigure(2, weight=1)
+
+        header_frame = ttk.Frame(shell)
+        header_frame.grid(row=0, column=0, sticky="ew", pady=(0, 12))
+        header_frame.columnconfigure(0, weight=1)
+
+        ttk.Label(header_frame, text="NAND Fix Pro", font=(self.FONT_FAMILY, 18, "bold")).grid(row=0, column=0, sticky="w")
+        ttk.Label(header_frame, text="Guided Nintendo Switch NAND repair and recovery", style="Muted.TLabel").grid(row=1, column=0, sticky="w", pady=(2, 0))
+        self.mode_status_text.set("Offline Mode" if self.offline_mode.get() else "Live Mode")
+        ttk.Label(header_frame, textvariable=self.mode_status_text, style="AccentHeader.TLabel").grid(row=0, column=1, rowspan=2, sticky="e")
+
         # --- STANDARD TTK.NOTEBOOK IMPLEMENTATION ---
-        self.tab_control = ttk.Notebook(self, style="TNotebook")
+        self.tab_control = ttk.Notebook(shell, style="TNotebook")
         
         # Create tab frames
         self.tab_level1 = ttk.Frame(self.tab_control, padding="15")
@@ -1508,30 +1838,36 @@ class SwitchGuiApp(tk.Tk):
         self.tab_control.add(self.tab_level1, text='Level 1: System Restore')
         self.tab_control.add(self.tab_level2, text='Level 2: Full Rebuild')
         self.tab_control.add(self.tab_level3, text='Level 3: Complete Recovery')
+        self.tab_control.bind("<<NotebookTabChanged>>", self._on_level_tab_changed)
         
         # Pack the notebook
-        self.tab_control.pack(expand=1, fill="both", padx=15, pady=10)
+        self.tab_control.grid(row=1, column=0, sticky="nsew")
         
         # --- POPULATE TABS ---
         self._setup_level1_tab(self.tab_level1)
         self._setup_level2_tab(self.tab_level2)
         self._setup_level3_tab(self.tab_level3)
+        self._on_level_tab_changed()
         
         # --- LOG WIDGET SETUP ---
-        log_frame = ttk.LabelFrame(self, text="Log Output", padding="10")
-        log_frame.pack(padx=15, pady=(5, 15), fill="both", expand=True)
+        log_frame = ttk.LabelFrame(shell, text="Log Output", padding="10", style="Card.TLabelframe")
+        log_frame.grid(row=2, column=0, pady=(12, 0), sticky="nsew")
         log_frame.columnconfigure(0, weight=1)
         log_frame.rowconfigure(0, weight=1)
 
         self.log_widget = scrolledtext.ScrolledText(log_frame, wrap=tk.WORD, state="disabled",
             bg="#1e1e1e", fg="#d4d4d4", relief="flat", borderwidth=2,
-            font=("Consolas", 10), insertbackground="#d4d4d4"
+            font=("Consolas", 10), insertbackground="#d4d4d4", height=8
         )
         self.log_widget.grid(row=0, column=0, sticky="nsew")
 
         # Add button frame for Save and Clear buttons
-        button_frame = ttk.Frame(log_frame)
-        button_frame.grid(row=1, column=0, pady=(10, 0), sticky="e")
+        status_frame = ttk.Frame(log_frame, style="Panel.TFrame")
+        status_frame.grid(row=1, column=0, pady=(10, 0), sticky="ew")
+        status_frame.columnconfigure(0, weight=1)
+
+        button_frame = ttk.Frame(status_frame, style="Panel.TFrame")
+        button_frame.grid(row=0, column=0, sticky="e")
 
         # Reset App button
         reset_button = ttk.Button(button_frame, text="Reset App", command=self._reset_application_state, style="TButton")
@@ -1544,12 +1880,30 @@ class SwitchGuiApp(tk.Tk):
         save_log_button.pack(side=tk.LEFT)
 
       
+    def _on_level_tab_changed(self, event=None):
+        """Tint the selected repair tab with the semantic color for that level."""
+        if not hasattr(self, "tab_control"):
+            return
+
+        try:
+            selected_index = self.tab_control.index(self.tab_control.select())
+        except tk.TclError:
+            selected_index = 0
+
+        selected_colors = [self.LEVEL1_COLOR, self.LEVEL2_COLOR, self.LEVEL3_COLOR]
+        hover_colors = [self.LEVEL1_ACTIVE, self.LEVEL2_ACTIVE, self.LEVEL3_ACTIVE]
+        selected_color = selected_colors[selected_index] if selected_index < len(selected_colors) else self.ACCENT_COLOR
+        hover_color = hover_colors[selected_index] if selected_index < len(hover_colors) else self.ACCENT_SOFT
+
+        self.style.map("TNotebook.Tab",
+                       background=[("selected", selected_color), ("active", hover_color)],
+                       foreground=[("selected", "#ffffff"), ("active", "#ffffff")])
 
     def _load_config(self):
         """Loads paths from config.ini, running auto-detect if it doesn't exist."""
         config = configparser.ConfigParser()
         # Paths that should be reset on each app launch
-        transient_paths = ["keys", "prodinfo", "firmware"]
+        transient_paths = ["keys", "prodinfo", "firmware", "rawnand"]
 
         if Path(self.config_file).exists():
             config.read(self.config_file)
@@ -1563,6 +1917,8 @@ class SwitchGuiApp(tk.Tk):
             # Load offline mode setting
             offline_mode_value = config.get('Settings', 'offline_mode', fallback='False')
             self.offline_mode.set(offline_mode_value.lower() == 'true')
+            guided_mode_seen_value = config.get('Settings', 'guided_mode_seen', fallback='False')
+            self.guided_mode_seen = guided_mode_seen_value.lower() == 'true'
             
             # Save config to clear transient paths from config.ini
             self._save_config()
@@ -1575,7 +1931,8 @@ class SwitchGuiApp(tk.Tk):
         config = configparser.ConfigParser()
         config['Paths'] = {key: var.get() for key, var in self.paths.items()}
         config['Settings'] = {
-            'offline_mode': str(self.offline_mode.get())
+            'offline_mode': str(self.offline_mode.get()),
+            'guided_mode_seen': str(self.guided_mode_seen)
         }
         with open(self.config_file, 'w') as configfile:
             config.write(configfile)
@@ -1687,11 +2044,179 @@ class SwitchGuiApp(tk.Tk):
         self._update_button_colors()
         self.update_idletasks()
 
-        # Enable PRODINFO menu whenever a valid PRODINFO file is loaded (from any source)
-        if self._is_path_valid("prodinfo"):
-            self._enable_prodinfo_menu()
-        else:
-            self._disable_prodinfo_menu()
+        if self.guided_mode_active:
+            self.after_idle(self._update_guided_callout)
+
+    def _start_guided_mode_if_needed(self):
+        """Show the first-run guided callout once."""
+        if not self.guided_mode_seen:
+            self._start_guided_mode()
+
+    def _start_guided_mode(self):
+        """Start a lightweight, state-based first-run guide."""
+        self.guided_mode_seen = True
+        self.guided_mode_active = True
+        self._save_config()
+        self._update_guided_callout()
+
+    def _stop_guided_mode(self):
+        """Stop Guided Mode and remove its callout window."""
+        self.guided_mode_active = False
+        if self.guided_callout_after_id:
+            try:
+                self.after_cancel(self.guided_callout_after_id)
+            except tk.TclError:
+                pass
+            self.guided_callout_after_id = None
+
+        if self.guided_callout and self._is_widget_valid(self.guided_callout):
+            self.guided_callout.destroy()
+        self.guided_callout = None
+
+    def _get_selected_level(self):
+        """Return the selected repair level from the notebook."""
+        try:
+            return self.tab_control.index(self.tab_control.select()) + 1
+        except tk.TclError:
+            return 1
+
+    def _get_guided_path_label(self, key):
+        labels = {
+            "firmware": "Firmware folder",
+            "keys": "prod.keys",
+            "prodinfo": "PRODINFO",
+            "rawnand": "RAWNAND file",
+            "partitions_folder": "NAND archive folder",
+            "output_l3": "Level 3 output folder",
+            "7z": "7-Zip",
+            "emmchaccgen": "EmmcHaccGen",
+            "nxnandmanager": "NxNandManager",
+            "osfmount": "OSFMount",
+        }
+        return labels.get(key, key)
+
+    def _get_guided_step(self):
+        """Pick the next practical action for the current app state."""
+        if not self.offline_mode.get() and self.button_states["get_keys"] != "completed":
+            for button in self.get_keys_buttons:
+                if self._is_widget_valid(button):
+                    return (
+                        button,
+                        "Step 1: Import SD files",
+                        "Before using this button, create a NAND backup and dump prod.keys directly on the console. Then mount the SD card with Hekate USB Tools and click Get Keys from SD. The app cannot dump keys or create the backup."
+                    )
+
+        selected_level = self._get_selected_level()
+        requirements = self.level_requirements_offline if self.offline_mode.get() else self.level_requirements
+        missing = [
+            self._get_guided_path_label(key)
+            for key in requirements.get(selected_level, [])
+            if not self._is_path_valid(key)
+        ]
+        if missing:
+            step_number = 1 if self.offline_mode.get() else 2
+            return (
+                self.tab_control,
+                f"Step {step_number}: Prepare Level {selected_level}",
+                "Missing: " + ", ".join(missing) + ". Add these paths, then dismount the SD card in Hekate USB Tools and mount eMMC RAW GPP or emuMMC RAW GPP before starting this level."
+            )
+
+        start_button = getattr(self, f"start_level{selected_level}_button", None)
+        if self._is_widget_valid(start_button) and self.button_states.get(f"level{selected_level}") == "active":
+            step_number = 2 if self.offline_mode.get() else 3
+            return (
+                start_button,
+                f"Step {step_number}: Start Level {selected_level}",
+                "All required files are ready. Dismount the SD card in Hekate USB Tools, mount eMMC RAW GPP or emuMMC RAW GPP, then click Start to run this level."
+            )
+
+        if self.button_states["copy_boot"] == "active":
+            for button in self.copy_boot_buttons:
+                if self._is_widget_valid(button):
+                    return (
+                        button,
+                        "Final Step: Copy BOOT",
+                        "After the eMMC write or alteration is done, forcefully disconnect the USB cable from the console. Remount the SD card with Hekate USB Tools, then click Copy BOOT to SD."
+                    )
+
+        return (
+            self.tab_control,
+            "Guided Mode",
+            "Choose the repair level that matches the case. The level button becomes active after Get Keys from SD and all required files for that level are ready."
+        )
+
+    def _create_guided_callout(self):
+        callout = tk.Toplevel(self)
+        callout.title("Guided Mode")
+        callout.configure(bg=self.BG_LIGHT)
+        callout.resizable(False, False)
+        callout.attributes("-topmost", True)
+        callout.protocol("WM_DELETE_WINDOW", self._stop_guided_mode)
+
+        frame = ttk.Frame(callout, padding=12)
+        frame.pack(fill="both", expand=True)
+
+        title_label = ttk.Label(frame, text="", style="Header.TLabel", wraplength=360)
+        title_label.pack(anchor="w", fill="x")
+
+        message_label = ttk.Label(frame, text="", style="TLabel", wraplength=360, justify="left")
+        message_label.pack(anchor="w", fill="x", pady=(8, 12))
+
+        button_frame = ttk.Frame(frame)
+        button_frame.pack(fill="x")
+        ttk.Button(button_frame, text="Refresh", command=self._update_guided_callout).pack(side=tk.LEFT)
+        ttk.Button(button_frame, text="Hide", command=self._stop_guided_mode).pack(side=tk.RIGHT)
+
+        callout.guided_title_label = title_label
+        callout.guided_message_label = message_label
+        return callout
+
+    def _position_guided_callout(self, target_widget):
+        try:
+            self.update_idletasks()
+            target_widget.update_idletasks()
+            callout = self.guided_callout
+            callout.update_idletasks()
+
+            screen_w = self.winfo_screenwidth()
+            screen_h = self.winfo_screenheight()
+            callout_w = callout.winfo_reqwidth()
+            callout_h = callout.winfo_reqheight()
+
+            x = target_widget.winfo_rootx() + target_widget.winfo_width() + 12
+            y = target_widget.winfo_rooty()
+            if x + callout_w > screen_w:
+                x = target_widget.winfo_rootx() - callout_w - 12
+            if x < 0:
+                x = self.winfo_rootx() + 20
+            if y + callout_h > screen_h:
+                y = max(0, screen_h - callout_h - 40)
+            callout.geometry(f"+{x}+{y}")
+        except tk.TclError:
+            pass
+
+    def _update_guided_callout(self):
+        """Refresh the Guided Mode callout text and position."""
+        if not self.guided_mode_active:
+            return
+
+        target_widget, title, message = self._get_guided_step()
+        if not self._is_widget_valid(target_widget):
+            return
+
+        if not self.guided_callout or not self._is_widget_valid(self.guided_callout):
+            self.guided_callout = self._create_guided_callout()
+
+        self.guided_callout.guided_title_label.config(text=title)
+        self.guided_callout.guided_message_label.config(text=message)
+        self._position_guided_callout(target_widget)
+
+        if self.guided_callout_after_id:
+            try:
+                self.after_cancel(self.guided_callout_after_id)
+            except tk.TclError:
+                pass
+        self.guided_callout_after_id = self.after(1500, self._update_guided_callout)
 
     def _is_widget_valid(self, widget):
         """Check if a widget still exists and is valid."""
@@ -1720,8 +2245,9 @@ class SwitchGuiApp(tk.Tk):
                 button = getattr(self, button_attr, None)
                 if button and self._is_widget_valid(button):
                     state_key = f"level{level_num}"
+                    active_style = f"Level{level_num}.Active.TButton"
                     if self.button_states[state_key] == "active":
-                        button.config(style="Active.TButton", state="normal")     # Blue and clickable
+                        button.config(style=active_style, state="normal")
                     elif self.button_states[state_key] == "completed":
                         button.config(style="Completed.TButton", state="disabled") # Green and disabled
                     else:
@@ -1754,58 +2280,6 @@ class SwitchGuiApp(tk.Tk):
                             "A tool for repairing and rebuilding Nintendo Switch eMMC NAND.\n\n"
                             "Developed and maintained by: sthetix")
             CustomDialog(self, title="About NAND Fix Pro", message=about_message)    
-
-    def _show_usage_guide_window(self):
-        """Creates a new window and displays the contents of usage.txt."""
-        try:
-            # Determine the path to the usage guide
-            try:
-                # Path when running as a script
-                base_path = Path(__file__).parent
-            except NameError:
-                # Path when running as a frozen executable (PyInstaller)
-                base_path = Path(sys.executable).parent
-            
-            guide_path = base_path / "lib" / "docs" / "usage.txt"
-
-            if guide_path.is_file():
-                with open(guide_path, 'r', encoding='utf-8') as f:
-                    guide_content = f.read()
-            else:
-                guide_content = "Error: Could not find the usage guide file.\n\n" \
-                                f"Please ensure 'usage.txt' exists in the following location:\n{guide_path}"
-        except Exception as e:
-            guide_content = f"An unexpected error occurred while trying to load the usage guide:\n\n{e}"
-
-        # Create the Toplevel window
-        help_win = tk.Toplevel(self)
-        help_win.title("Usage Guide")
-        help_win.geometry("700x600")
-        help_win.configure(bg=self.BG_COLOR)
-        
-        # Center the window relative to the parent
-        parent_x, parent_y = self.winfo_x(), self.winfo_y()
-        parent_w, parent_h = self.winfo_width(), self.winfo_height()
-        win_w, win_h = 700, 600
-        x = parent_x + (parent_w // 2) - (win_w // 2)
-        y = parent_y + (parent_h // 2) - (win_h // 2)
-        help_win.geometry(f"+{x}+{y}")
-        
-        # Create a ScrolledText widget
-        text_widget = scrolledtext.ScrolledText(help_win, wrap=tk.WORD,
-            bg="#1e1e1e", fg="#d4d4d4", relief="flat", borderwidth=1,
-            font=("Segoe UI", 10), insertbackground="#d4d4d4"
-        )
-        text_widget.pack(expand=True, fill="both", padx=15, pady=15)
-        
-        # Insert the content and make it read-only
-        text_widget.insert(tk.END, guide_content)
-        text_widget.config(state="disabled")
-
-        help_win.transient(self)
-        help_win.protocol("WM_DELETE_WINDOW", help_win.destroy)
-        help_win.grab_set()
-        help_win.wait_window(help_win)
 
     def _save_log(self):
         """Save the current log contents to a file."""
@@ -1972,16 +2446,17 @@ class SwitchGuiApp(tk.Tk):
 
     def _create_path_selector_row(self, parent, key, label_text, type):
         row = parent.grid_size()[1]
-        ttk.Label(parent, text=label_text, font=(self.FONT_FAMILY, 10)).grid(row=row, column=0, sticky="w", padx=5, pady=6)
+        ttk.Label(parent, text=label_text, font=(self.FONT_FAMILY, 10)).grid(row=row, column=0, sticky="w", padx=5, pady=5)
         
         path_label = ttk.Label(parent, textvariable=self.paths[key],
-            relief="solid", anchor="w", padding=(8, 5), background="#3c3c3c", borderwidth=1,
+            relief="solid", anchor="w", padding=(10, 6), background=self.FIELD_COLOR,
+            foreground=self.FG_COLOR, borderwidth=1,
             font=(self.FONT_FAMILY, 9)
         )
-        path_label.grid(row=row, column=1, sticky="ew", padx=5, pady=6)
+        path_label.grid(row=row, column=1, sticky="ew", padx=5, pady=5)
         
         browse_button = ttk.Button(parent, text="Browse...", command=lambda k=key, t=type: self._select_path(k, t), style="TButton")
-        browse_button.grid(row=row, column=2, padx=5, pady=6)
+        browse_button.grid(row=row, column=2, padx=5, pady=5)
         
         # NEW: Store reference to PRODINFO browse button
         if key == "prodinfo":
@@ -1997,11 +2472,21 @@ class SwitchGuiApp(tk.Tk):
     
     def _setup_tab_content(self, parent_frame, title, info_text, paths):
         parent_frame.columnconfigure(1, weight=1)
+        accent_color = self.ACCENT_COLOR
+        if title.startswith("Level 1"):
+            accent_color = self.LEVEL1_COLOR
+        elif title.startswith("Level 2"):
+            accent_color = self.LEVEL2_COLOR
+        elif title.startswith("Level 3"):
+            accent_color = self.LEVEL3_COLOR
         
         # Row 0: Description
-        desc_frame = ttk.LabelFrame(parent_frame, text=title, padding="15")
+        desc_frame = ttk.LabelFrame(parent_frame, text=title, padding="15", style="Card.TLabelframe")
         desc_frame.grid(row=0, column=0, columnspan=3, pady=(5, 15), sticky="ew")
-        ttk.Label(desc_frame, text=info_text, wraplength=650, justify=tk.LEFT).pack(anchor="w")
+        tk.Frame(desc_frame, height=3, bg=accent_color, highlightthickness=0).pack(fill="x", pady=(0, 12))
+        desc_label = ttk.Label(desc_frame, text=info_text, wraplength=760, justify=tk.LEFT, style="Panel.TLabel")
+        desc_label.pack(anchor="w", fill="x")
+        desc_frame.bind("<Configure>", lambda event, label=desc_label: label.configure(wraplength=max(420, event.width - 36)))
 
         # Row 1: Input file/folder selectors
         input_frame = ttk.Frame(parent_frame)
@@ -2015,11 +2500,11 @@ class SwitchGuiApp(tk.Tk):
         """Creates a standardized button area at a fixed grid row."""
         # This frame will now always be placed in row 4 of its parent
         button_area_frame = ttk.Frame(parent_frame)
-        button_area_frame.grid(row=4, column=0, columnspan=3, sticky="ew", pady=(20, 10))
+        button_area_frame.grid(row=4, column=0, columnspan=3, sticky="ew", pady=(8, 18))
 
         # Create the main button row inside this standardized area
         button_frame = self._create_main_button_row(button_area_frame, level_name, command, button_ref)
-        button_frame.pack(pady=5)
+        button_frame.pack(pady=4)
 
         return button_area_frame       
 
@@ -2043,7 +2528,7 @@ class SwitchGuiApp(tk.Tk):
             info_text = ("OFFLINE MODE: Fixes a corrupt SYSTEM partition in a NAND file(s).\n\n"
                          "• Use this for software errors, failed updates, or boot issues.\n"
                          "• The process reads PRODINFO and SYSTEM from your NAND backup.\n"
-                         "• Output: RAWNAND_FIXED_L1.bin with preserved user data.")
+                         "• The selected NAND file is updated in place; BOOT0/BOOT1 are saved beside it.")
             paths = [
                 ("rawnand", "NAND File(s):", "file"),
                 ("keys", "prod.keys File:", "file"),
@@ -2060,15 +2545,15 @@ class SwitchGuiApp(tk.Tk):
 
         self._setup_tab_content(parent_frame, "Level 1: Description", info_text, paths)
 
-        # Row 2: Add a spacer to push the buttons to the bottom of the available area.
-        spacer = ttk.Frame(parent_frame)
-        spacer.grid(row=2, column=0, sticky="nsew")
-        parent_frame.rowconfigure(2, weight=1)
+        # Row 2: Compact spacer between path fields and advanced options.
+        spacer = ttk.Frame(parent_frame, height=10)
+        spacer.grid(row=2, column=0, sticky="ew")
+        parent_frame.rowconfigure(2, weight=0)
 
         # Row 3: The empty placeholder frame for the 'Advanced Button'.
         # This frame has padding, which creates the vertical space needed for alignment.
         advanced_frame_placeholder = ttk.Frame(parent_frame)
-        advanced_frame_placeholder.grid(row=3, column=0, columnspan=3, pady=20)
+        advanced_frame_placeholder.grid(row=3, column=0, columnspan=3, pady=(8, 14))
 
         # Add console type override checkbox
         override_checkbox = ttk.Checkbutton(
@@ -2106,7 +2591,7 @@ class SwitchGuiApp(tk.Tk):
             info_text = ("OFFLINE MODE: Rebuilds NAND using clean donor partitions in a NAND file(s).\n\n"
                          "• Use this when multiple partitions are corrupt in your backup.\n"
                          "• The process reads PRODINFO from your NAND backup, then flashes clean partitions.\n"
-                         "• Output: RAWNAND_FIXED_L2.bin (ALL USER DATA ERASED)")
+                         "• The selected NAND file is rebuilt in place. ALL USER DATA IS ERASED.")
             paths = [
                 ("rawnand", "NAND File(s):", "file"),
                 ("keys", "prod.keys File:", "file"),
@@ -2123,14 +2608,14 @@ class SwitchGuiApp(tk.Tk):
 
         self._setup_tab_content(parent_frame, "Level 2: Description", info_text, paths)
 
-        # Row 2: Add a spacer.
-        spacer = ttk.Frame(parent_frame)
-        spacer.grid(row=2, column=0, sticky="nsew")
-        parent_frame.rowconfigure(2, weight=1)
+        # Row 2: Compact spacer between path fields and advanced options.
+        spacer = ttk.Frame(parent_frame, height=10)
+        spacer.grid(row=2, column=0, sticky="ew")
+        parent_frame.rowconfigure(2, weight=0)
 
         # Row 3: Advanced USER fix button and console type override checkbox
         advanced_frame = ttk.Frame(parent_frame)
-        advanced_frame.grid(row=3, column=0, columnspan=3, pady=20)
+        advanced_frame.grid(row=3, column=0, columnspan=3, pady=(8, 14))
 
         # Advanced USER fix button (centered)
         advanced_user_button = ttk.Button(advanced_frame, text="Advanced: Fix USER Only",
@@ -2193,14 +2678,14 @@ class SwitchGuiApp(tk.Tk):
 
         self._setup_tab_content(parent_frame, "Level 3: Description", info_text, paths)
 
-        # Row 2: Add a spacer.
-        spacer = ttk.Frame(parent_frame)
-        spacer.grid(row=2, column=0, sticky="nsew")
-        parent_frame.rowconfigure(2, weight=1)
+        # Row 2: Compact spacer above the action area.
+        spacer = ttk.Frame(parent_frame, height=12)
+        spacer.grid(row=2, column=0, sticky="ew")
+        parent_frame.rowconfigure(2, weight=0)
 
         # Row 3: The empty placeholder frame for the 'Advanced Button'.
         advanced_frame_placeholder = ttk.Frame(parent_frame)
-        advanced_frame_placeholder.grid(row=3, column=0, columnspan=3, pady=20)
+        advanced_frame_placeholder.grid(row=3, column=0, columnspan=3, pady=(6, 10))
 
         # Row 4: The main button area, in the same fixed position.
         self._create_standard_button_area(parent_frame, "Level 3",
@@ -2211,6 +2696,8 @@ class SwitchGuiApp(tk.Tk):
 
     def _start_user_fix_threaded(self):
         """Starts the targeted USER partition fix in a new thread."""
+        self.progress_value.set(0)
+        self.status_text.set("Starting USER partition fix")
         self._disable_buttons()
         thread = threading.Thread(target=self._run_user_fix_process)
         thread.daemon = True
@@ -2293,6 +2780,8 @@ class SwitchGuiApp(tk.Tk):
             partitions_folder = script_dir / "lib" / "NAND"
 
             user_archive = "USER-64.7z" if target_size_gb > 40 else "USER-32.7z"
+            if not self._verify_nand_archives([user_archive], partitions_folder):
+                return
 
             cmd = [self.paths['7z'].get(), 'x', str(partitions_folder / user_archive), f'-o{temp_dir}', '-bsp1', '-y']
             if self._run_command_with_progress(cmd, "Extracting USER partition")[0] != 0:
@@ -2691,6 +3180,8 @@ class SwitchGuiApp(tk.Tk):
         else:
             donor_archive, donor_bin_name, size = (nand_lib_dir / "donor32.7z", "rawnand32.bin", "32GB")
         self._log(f"--- Target: {size} eMMC, using {donor_archive.name}")
+        if not self._verify_nand_archives([donor_archive.name], nand_lib_dir):
+            return None
         
         if not donor_archive.is_file():
             self._log(f"ERROR: Donor NAND archive not found: {donor_archive}")
@@ -2714,6 +3205,8 @@ class SwitchGuiApp(tk.Tk):
         return donor_nand_path      
     
     def _start_level3_threaded(self):
+        self.progress_value.set(0)
+        self.status_text.set("Starting Level 3 process")
         self._disable_buttons()
         thread = threading.Thread(target=self._start_level3_process); 
         thread.daemon = True; 
@@ -2727,9 +3220,7 @@ class SwitchGuiApp(tk.Tk):
     def _re_enable_buttons(self):
         # Re-enabling is now handled by the validation function
         self._validate_paths_and_update_buttons()
-        # Re-enable PRODINFO menu if appropriate
-        if self._is_path_valid("prodinfo"):
-            self._enable_prodinfo_menu()
+        self._enable_prodinfo_menu()
 
     def _dialog(self, title, message, buttons="ok"):
         """Thread-safe wrapper for CustomDialog. Safe to call from worker threads."""
@@ -2767,6 +3258,8 @@ class SwitchGuiApp(tk.Tk):
 
     def _on_offline_mode_toggle(self):
         """Handle offline mode toggle"""
+        self.mode_status_text.set("Offline Mode" if self.offline_mode.get() else "Live Mode")
+
         if self.offline_mode.get():
             self._log("INFO: Offline Mode ENABLED - Will use RAWNAND.bin file instead of physical eMMC")
             self._log("INFO: Please configure file paths for RAWNAND.bin and prod.keys")
@@ -2800,6 +3293,8 @@ class SwitchGuiApp(tk.Tk):
     def _on_closing(self):
         """Handle application closing - clean up temp directory and temporary files."""
         try:
+            self._stop_guided_mode()
+
             # Check if BOOT files are pending copy to SD card (only in online/live mode)
             if (hasattr(self, 'last_output_dir') and
                 self.last_output_dir and
@@ -3029,6 +3524,9 @@ class SwitchGuiApp(tk.Tk):
         self._log(f"\n[STEP 5/8] Preparing all partition data from donor archives...")
         nx_exe = self.paths['nxnandmanager'].get()
         partitions_folder = Path(self.paths['partitions_folder'].get())
+        user_archive = "USER-64.7z" if target_size_gb > 40 else "USER-32.7z"
+        if not self._verify_nand_archives(["SYSTEM.7z", "PRODINFOF.7z", "SAFE.7z", user_archive], partitions_folder):
+            return
         
         # --- MODIFIED FOR V1.0.2: Progress Bar for all 7z extractions ---
         for part_info in [("SYSTEM", "SYSTEM.7z"), ("PRODINFOF", "PRODINFOF.7z"), ("SAFE", "SAFE.7z")]:
@@ -3038,7 +3536,6 @@ class SwitchGuiApp(tk.Tk):
                 self._log(f"ERROR: Failed to extract donor {part_name} partition.")
                 return
 
-        user_archive = "USER-64.7z" if target_size_gb > 40 else "USER-32.7z"
         cmd = [self.paths['7z'].get(), 'x', str(partitions_folder / user_archive), f'-o{temp_dir}', '-bsp1', '-y']
         if self._run_command_with_progress(cmd, "Extracting USER")[0] != 0:
             self._log("ERROR: Failed to extract USER partition.")
@@ -3219,6 +3716,9 @@ class SwitchGuiApp(tk.Tk):
             copy_size = 4 * (1024**3)
             self._log(f"--- OPTIMIZATION: Writing only first 4GB (covers all essential partitions)")
 
+            if not self._validate_physical_target_for_write(target_drive, "raw NAND write"):
+                return False
+
             self._log(f"--- Opening target drive: {target_drive}")
             try:
                 target_fd = os.open(target_drive, os.O_WRONLY | os.O_BINARY)
@@ -3315,8 +3815,8 @@ class SwitchGuiApp(tk.Tk):
             activebackground=self.ACCENT_COLOR, activeforeground=self.FG_COLOR,
             relief="flat", borderwidth=0
         )
-        menubar.add_cascade(label="PRODINFO Editor", menu=prodinfo_menu, state="disabled")
-        prodinfo_menu.add_command(label="Edit PRODINFO File", command=self._open_prodinfo_editor)
+        menubar.add_cascade(label="Tools", menu=prodinfo_menu, state="normal")
+        prodinfo_menu.add_command(label="PRODINFO Editor...", command=self._open_prodinfo_editor)
         
         # Store reference for enabling/disabling
         self.prodinfo_menu_cascade = menubar
@@ -3326,9 +3826,12 @@ class SwitchGuiApp(tk.Tk):
         """Open PRODINFO editor dialog"""
         prodinfo_path = self.paths["prodinfo"].get()
         if not prodinfo_path or not Path(prodinfo_path).exists():
-            CustomDialog(self, title="No PRODINFO", 
-                        message="Please load a PRODINFO file first by using 'Get Keys from SD' or selecting one manually in Settings.")
-            return
+            prodinfo_path = filedialog.askopenfilename(
+                title="Select Decrypted PRODINFO",
+                filetypes=[("Decrypted PRODINFO", "*.dec"), ("PRODINFO File", "*.*")],
+            )
+            if not prodinfo_path:
+                return
         
         try:
             dialog = PRODINFOEditorDialog(self, prodinfo_path)
@@ -3496,6 +3999,11 @@ class SwitchGuiApp(tk.Tk):
                         pass
 
     def _log(self, message, end="\n"):
+        if hasattr(self, "status_text") and message:
+            clean_status = message.strip()
+            if clean_status:
+                self.status_text.set(clean_status[:160])
+
         # Check if log_widget exists before trying to use it
         if hasattr(self, 'log_widget') and self.log_widget:
             # --- MODIFIED FOR V1.0.2: Clean up progress bar before logging new line ---
@@ -3536,6 +4044,8 @@ class SwitchGuiApp(tk.Tk):
             return -1, str(e)
     
     def _start_threaded_process(self, level):
+        self.progress_value.set(0)
+        self.status_text.set(f"Starting {level} process")
         self._disable_buttons()
         thread = threading.Thread(target=self._start_process, args=(level,)); thread.daemon = True; thread.start()
 
@@ -3791,6 +4301,9 @@ class SwitchGuiApp(tk.Tk):
             
             target_drive = potential_drives[0]
             drive_path = target_drive['path']
+
+            if not self._validate_physical_target_for_write(drive_path, "NAND operation"):
+                return None, None
 
             # Store the drive type for later use when copying boot files
             self.last_target_drive_type = target_drive.get('type', 'eMMC GPP')
@@ -4114,6 +4627,10 @@ class SwitchGuiApp(tk.Tk):
         if self._run_command(emmchaccgen_cmd, cwd=str(emmchaccgen_out_dir))[0] != 0: return
 
         self._log(f"\n[STEP 5/7] Preparing donor SYSTEM partition...")
+        selected_user_archive = "USER-64.7z" if detected_model == "OLED" else "USER-32.7z"
+        if not self._verify_nand_archives(["SYSTEM.7z", "PRODINFOF.7z", "SAFE.7z", selected_user_archive], partitions_folder):
+            return
+
         cmd = [self.paths['7z'].get(), 'x', str(partitions_folder / "SYSTEM.7z"), f'-o{temp_dir}', '-bsp1', '-y']
         if self._run_command_with_progress(cmd, "Extracting SYSTEM")[0] != 0: return
         system_dec_path = Path(temp_dir) / "SYSTEM.dec"
