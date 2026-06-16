@@ -182,11 +182,8 @@ NAND-Fix-Pro/
 ├── nandfixpro.py
 ├── Installers/
 │   ├── osfmount.exe
-│   ├── osfmount.exe.sha256
 │   ├── python-3.13.7-amd64.exe
-│   ├── python-3.13.7-amd64.exe.sha256
-│   ├── windowsdesktop-runtime-8.0.20-win-x64.exe
-│   └── windowsdesktop-runtime-8.0.20-win-x64.exe.sha256
+│   └── windowsdesktop-runtime-8.0.20-win-x64.exe
 │
 └───lib/
     ├── 7z/
@@ -198,19 +195,12 @@ NAND-Fix-Pro/
     │
     └───NAND/
         ├── donor32.7z
-        ├── donor32.7z.sha256
         ├── donor64.7z
-        ├── donor64.7z.sha256
         ├── PRODINFOF.7z
-        ├── PRODINFOF.7z.sha256
         ├── SAFE.7z
-        ├── SAFE.7z.sha256
         ├── SYSTEM.7z
-        ├── SYSTEM.7z.sha256
         ├── USER-32.7z
-        ├── USER-32.7z.sha256
-        ├── USER-64.7z
-        └── USER-64.7z.sha256
+        └── USER-64.7z
 ```
 
 ---

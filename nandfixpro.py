@@ -1678,59 +1678,27 @@ class SwitchGuiApp(tk.Tk):
             self._log(f"    Interface: {drive.get('interface')}")
             return True
 
-    def _verify_sha256_sidecar(self, file_path):
-            """Verify a file against a same-name .sha256 sidecar."""
+    def _verify_nand_archive_exists(self, file_path):
+            """Verify that a required NAND archive exists."""
             file_path = Path(file_path)
-            hash_path = Path(str(file_path) + ".sha256")
 
             if not file_path.is_file():
                 self._log(f"ERROR: Required archive not found: {file_path}")
                 return False
 
-            if not hash_path.is_file():
-                self._log(f"ERROR: Missing SHA256 sidecar: {hash_path}")
-                return False
-
-            try:
-                expected_hash = hash_path.read_text(encoding="utf-8").split()[0].strip().lower()
-            except Exception as e:
-                self._log(f"ERROR: Could not read SHA256 sidecar {hash_path}: {e}")
-                return False
-
-            if len(expected_hash) != 64 or any(c not in "0123456789abcdef" for c in expected_hash):
-                self._log(f"ERROR: Invalid SHA256 sidecar format: {hash_path}")
-                return False
-
-            try:
-                sha256 = hashlib.sha256()
-                with open(file_path, "rb") as f:
-                    for chunk in iter(lambda: f.read(1024 * 1024), b""):
-                        sha256.update(chunk)
-                actual_hash = sha256.hexdigest()
-            except Exception as e:
-                self._log(f"ERROR: Could not hash {file_path}: {e}")
-                return False
-
-            if actual_hash != expected_hash:
-                self._log(f"ERROR: SHA256 mismatch for {file_path.name}")
-                self._log(f"Expected: {expected_hash}")
-                self._log(f"Actual:   {actual_hash}")
-                return False
-
-            self._log(f"--- SHA256 verified: {file_path.name}")
+            self._log(f"--- NAND archive found: {file_path.name}")
             return True
 
     def _verify_nand_archives(self, archive_names, partitions_folder=None):
-            """Verify required NAND archives before extraction or write operations."""
+            """Verify required NAND archives are present before extraction or write operations."""
             base_path = Path(partitions_folder or self.paths["partitions_folder"].get())
-            self._log("--- Verifying NAND archive integrity...")
+            self._log("--- Checking required NAND archives...")
 
             for archive_name in archive_names:
-                if not self._verify_sha256_sidecar(base_path / archive_name):
+                if not self._verify_nand_archive_exists(base_path / archive_name):
                     self._dialog(
-                        "Archive Verification Failed",
-                        f"Failed to verify NAND archive:\n{archive_name}\n\n"
-                        "The archive is missing, corrupted, or its .sha256 sidecar is missing/invalid.\n"
+                        "Missing NAND Archive",
+                        f"Required NAND archive is missing:\n{archive_name}\n\n"
                         "Please restore the original release files and try again."
                     )
                     return False
@@ -1805,7 +1773,6 @@ class SwitchGuiApp(tk.Tk):
             for archive_name in archive_names:
                 archive_path = nand_path / archive_name
                 required_files.append(archive_path)
-                required_files.append(Path(str(archive_path) + ".sha256"))
 
             return required_files
 
@@ -1970,7 +1937,10 @@ class SwitchGuiApp(tk.Tk):
     def _save_config(self):
         """Saves current paths to config.ini."""
         config = configparser.ConfigParser()
-        config['Paths'] = {key: var.get() for key, var in self.paths.items()}
+        config['Paths'] = {
+            key: os.path.normpath(var.get()) if var.get() else ""
+            for key, var in self.paths.items()
+        }
         config['Settings'] = {
             'offline_mode': str(self.offline_mode.get()),
             'guided_mode_seen': str(self.guided_mode_seen)
